@@ -1,0 +1,32 @@
+{
+  "full_name": "Santiago Álvarez Fuente",
+  "name": "Santi",
+  "current_role": "Full Stack Python Developer",
+  "location": "León, Spain (Remote)",
+  "email": "santiagoalvarez87@gmail.com",
+  "linkedin": "linkedin.com/in/santiago-álvarez-fuente-cv",
+  "specialties": [
+    "Python Backend Development (FastAPI, Django, Flask)",
+    "Data Engineering (PySpark, Databricks, Kafka, Snowflake)",
+    "Cloud Infrastructure (AWS, Azure, Docker, Kubernetes/OpenShift)",
+    "AI Engineering (RAG, LangChain, LLM-powered tools)"
+  ],
+  "years_experience": 10,
+  "education": [
+    {
+      "degree": "MSc Big Data & Business Analytics",
+      "institution": "Universidad Europea Miguel de Cervantes",
+      "year": "2019"
+    },
+    {
+      "degree": "Web Development Master Bootcamp",
+      "institution": "KeepCoding",
+      "year": "2018"
+    },
+    {
+      "degree": "BSc Telecommunications Engineering",
+      "institution": "Universitat Oberta de Catalunya",
+      "year": "2016"
+    }
+  ]
+}

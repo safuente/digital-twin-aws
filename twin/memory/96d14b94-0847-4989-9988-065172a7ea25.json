@@ -1,0 +1,32 @@
+[
+  {
+    "role": "user",
+    "content": "who are you",
+    "timestamp": "2026-06-15T15:51:05.204384"
+  },
+  {
+    "role": "assistant",
+    "content": "I'm Santiago \u00c1lvarez Fuente, but you can call me Santi. I'm a Full Stack Python Developer with over 10 years of experience in software development, particularly in Python backend systems and full-stack web applications. I'm currently based in Le\u00f3n, Spain, and work remotely. My expertise includes Python frameworks like FastAPI, Django, and Flask, as well as data engineering, cloud infrastructure, and AI engineering.\n\nI\u2019m here to answer any questions you may have about my professional experience, skills, or projects. How can I assist you today?",
+    "timestamp": "2026-06-15T15:51:05.204394"
+  },
+  {
+    "role": "user",
+    "content": "what is your current project?",
+    "timestamp": "2026-06-15T15:51:26.232485"
+  },
+  {
+    "role": "assistant",
+    "content": "Currently, I'm focusing on several exciting projects related to AI engineering. Some of the highlights include:\n\n1. **AI Resume Chatbot (CV Talk)**: This project aims to assist users in creating and optimizing their resumes using AI.\n\n2. **RAG System**: It's a project that utilizes ChromaDB and LangChain to build a retrieval-augmented generation system.\n\n3. **AI Code Converter**: This multi-model tool is designed to convert code between different programming languages.\n\n4. **Web Summarizer**: A mini web application using GPT-4 to summarize web content efficiently.\n\nYou can check out these projects and more on my portfolio at safuente.com/#projects. I\u2019m always looking to explore and create new AI-driven solutions. If you're interested in any specific aspect, feel free to ask!",
+    "timestamp": "2026-06-15T15:51:26.232492"
+  },
+  {
+    "role": "user",
+    "content": "what\u00b4s your main expperience?",
+    "timestamp": "2026-06-15T15:51:54.158105"
+  },
+  {
+    "role": "assistant",
+    "content": "I have over 10 years of experience in software development, with a robust background in various areas:\n\n1. **Python Backend Development**: I've worked extensively with frameworks such as FastAPI, Django, and Flask to build robust backend systems. This includes creating critical enterprise platforms for clients like Telef\u00f3nica and Inditex.\n\n2. **Data Engineering**: I've developed PySpark ETL pipelines, worked with Kafka for real-time data processing, and managed data storage solutions using Snowflake and Delta Lake.\n\n3. **Cloud Infrastructure**: My experience includes deploying and managing applications on AWS and Azure, alongside container orchestration with Docker and Kubernetes/OpenShift.\n\n4. **Full-Stack Development**: I often work on full-stack applications, including frontend development using Angular, TypeScript, and D3.js.\n\n5. **AI Engineering**: Recently, I\u2019ve been diving deeper into AI, focusing on building systems with RAG models and employing tools like LangChain for AI-driven applications.\n\nMy drive lies in creating resilient, production-grade systems, especially leveraging microservices and async processing. If you want to know more about specific projects or technologies, just let me know!",
+    "timestamp": "2026-06-15T15:51:54.158122"
+  }
+]
