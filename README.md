@@ -23,7 +23,7 @@ API Gateway (HTTP API, routing, CORS)
     ▼
 Lambda Function (FastAPI via Mangum)
     │
-    ├──► OpenAI API        (generates responses)
+    ├──► AWS Bedrock       (generates responses — Amazon Nova models)
     └──► S3 Memory Bucket  (persists conversation history as JSON)
 ```
 
@@ -34,7 +34,7 @@ Lambda Function (FastAPI via Mangum)
 | **API Gateway**      | Manages API routes, handles CORS                              |
 | **Lambda**           | Runs the Python FastAPI backend serverlessly                  |
 | **S3 (memory)**      | Stores conversation history as one JSON file per session      |
-| **OpenAI**           | Language model that powers the twin's replies                 |
+| **AWS Bedrock**      | Managed foundation models (Amazon Nova) that power replies    |
 
 ---
 
@@ -67,8 +67,8 @@ digital-twin-aws/
 - **Python 3.12** and [`uv`](https://docs.astral.sh/uv/)
 - **Node.js 18+** and npm (for the frontend)
 - **Docker Desktop** (used by `deploy.py` to build Linux-native dependencies)
-- An **OpenAI API key**
 - An **AWS account** with the AWS CLI configured (`aws configure` or SSO)
+- **AWS Bedrock access** to the Amazon Nova models in your region (no longer requires per-model approval as of 2026 — it's quota-based; request a quota increase only if you hit limits)
 
 ---
 
@@ -85,11 +85,27 @@ uv run uvicorn server:app --reload
 Create `twin/backend/.env`:
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key
+DEFAULT_AWS_REGION=us-east-1                          # region used for the Bedrock client
+BEDROCK_MODEL_ID=global.amazon.nova-2-lite-v1:0       # see model options below
 CORS_ORIGINS=http://localhost:3000
-USE_S3=false                 # use local ../memory for storage in dev
+USE_S3=false                                          # use local ../memory for storage in dev
 MEMORY_DIR=../memory
 ```
+
+> The backend authenticates to Bedrock with your AWS credentials, so your local
+> `aws configure` profile must have Bedrock access. No API key is needed — OpenAI has
+> been removed.
+
+**Bedrock model options** (`BEDROCK_MODEL_ID`):
+
+- `global.amazon.nova-2-lite-v1:0` — **recommended default** (cross-region inference profile; highest quotas, fewest approvals)
+- `amazon.nova-micro-v1:0` — fastest and cheapest
+- `amazon.nova-lite-v1:0` — balanced
+- `amazon.nova-pro-v1:0` — most capable, more expensive
+
+If a region-specific quota error appears, try a geography-prefixed id such as
+`us.amazon.nova-lite-v1:0` or `eu.amazon.nova-lite-v1:0`. `us-east-1` is a safe Bedrock
+region and does not have to match the region of your other services.
 
 The API runs at `http://localhost:8000`. Useful endpoints:
 
@@ -123,6 +139,8 @@ Create an IAM user group (e.g. `TwinAccess`) and attach these managed policies, 
 - `AmazonAPIGatewayAdministrator`
 - `CloudFrontFullAccess`
 - `IAMReadOnlyAccess`
+- `AmazonBedrockFullAccess` — for Bedrock AI services
+- `CloudWatchFullAccess` — for metrics and dashboards
 
 Sign in as the IAM user for the remaining steps (not the root account).
 
@@ -171,13 +189,16 @@ This produces `lambda-deployment.zip`.
    - Upload to a temporary S3 bucket and point Lambda at the S3 URI (recommended for >10 MB).
 3. **Runtime settings → Handler:** `lambda_handler.handler`
 4. **Configuration → Environment variables:**
-   - `OPENAI_API_KEY` = your key
+   - `DEFAULT_AWS_REGION` = `us-east-1` (region for the Bedrock client)
+   - `BEDROCK_MODEL_ID` = `global.amazon.nova-2-lite-v1:0` (add a `us.`/`eu.` prefix if you hit a quota error)
    - `CORS_ORIGINS` = `*` (restricted later to the CloudFront URL)
    - `USE_S3` = `true`
    - `S3_BUCKET` = your memory bucket name (created next)
-5. **Configuration → General configuration → Timeout:** `30 seconds`
+5. **Configuration → Permissions:** attach `AmazonBedrockFullAccess` to the Lambda **execution role** so the function can call Bedrock.
+6. **Configuration → General configuration → Timeout:** `30 seconds`
 
-**Test** with an API Gateway proxy event for `GET /health`; expect `{"status": "healthy", "use_s3": true}`.
+**Test** with an API Gateway proxy event for `GET /health`; expect
+`{"status": "healthy", "use_s3": true, "bedrock_model": "global.amazon.nova-2-lite-v1:0"}`.
 
 ### Part 4 — Create S3 Buckets
 
@@ -270,6 +291,35 @@ Then invalidate the CloudFront cache (Invalidations → path `/*`) so changes pr
 
 ---
 
+## Redeploying After Code Changes
+
+Whenever you change backend code or `requirements.txt`, rebuild the package and update the function. The CLI reads the region from your `~/.aws/config` default profile, so `--region` is optional (and `$DEFAULT_AWS_REGION` is only set if you've exported it — `.env` is not auto-loaded into your shell).
+
+```bash
+cd twin/backend
+set -a; source .env; set +a          # optional: export .env vars into the shell
+uv run deploy.py                      # rebuild lambda-deployment.zip
+
+# Direct upload (fast connections):
+aws lambda update-function-code \
+    --function-name twin-api \
+    --zip-file fileb://lambda-deployment.zip
+
+# Or via a temporary S3 bucket (more reliable for >10 MB / slow links):
+DEPLOY_BUCKET="twin-deploy-$(date +%s)"
+aws s3 mb "s3://$DEPLOY_BUCKET"
+aws s3 cp lambda-deployment.zip "s3://$DEPLOY_BUCKET/"
+aws lambda update-function-code \
+    --function-name twin-api \
+    --s3-bucket "$DEPLOY_BUCKET" \
+    --s3-key lambda-deployment.zip
+aws s3 rm "s3://$DEPLOY_BUCKET/lambda-deployment.zip" && aws s3 rb "s3://$DEPLOY_BUCKET"
+```
+
+Wait for `"LastUpdateStatus": "Successful"` in the output, then re-run the `GET /health` test.
+
+---
+
 ## Testing the Full Stack
 
 1. Visit `https://<distribution>.cloudfront.net` and chat with your twin (served over HTTPS).
@@ -284,8 +334,9 @@ Then invalidate the CloudFront cache (Invalidations → path `/*`) so changes pr
 | ------- | ------------------ |
 | `No module named 'pydantic_core._pydantic_core'` | Package/function **architecture mismatch** — rebuild `deploy.py` for the function's arch (see warning above). |
 | **CORS errors** in the browser console | `CORS_ORIGINS` must exactly match the CloudFront URL (`https://`, no trailing `/`); ensure the `OPTIONS` route and API Gateway CORS are configured. |
-| **500 Internal Server Error** | Check CloudWatch logs; verify env vars and that the execution role has S3 access. |
-| **Chat not working** | Confirm `OPENAI_API_KEY`; ensure Lambda timeout ≥ 30 s. |
+| **500 Internal Server Error** | Check CloudWatch logs; verify env vars and that the execution role has S3 **and Bedrock** access. |
+| **Chat not working / "Sorry, I encountered an error"** | Usually a Bedrock error (look for a 500 in the browser console). Ensure the execution role has `AmazonBedrockFullAccess`, the timeout is ≥ 30 s, and try a `us.`/`eu.` prefixed `BEDROCK_MODEL_ID` if it's a quota/region issue. |
+| **`AccessDeniedException` from Bedrock** | The Lambda execution role (or your local AWS profile) lacks Bedrock access — attach `AmazonBedrockFullAccess`. |
 | **Frontend not updating** | Create a CloudFront invalidation (`/*`) and clear the browser cache. |
 | **Memory not persisting** | Verify `USE_S3=true`, `S3_BUCKET` is correct, and the role has `AmazonS3FullAccess`. |
 | **Missing credentials in config** | Your AWS credentials are empty/unset — run `aws configure` (or `aws sso login`) so a valid `[default]` profile exists. |
@@ -298,6 +349,7 @@ Then invalidate the CloudFront cache (Invalidations → path `/*`) so changes pr
 - **API Gateway (HTTP API):** first 1M free, then ~$1.00 / 1M
 - **S3:** ~$0.023 / GB-month + small per-request fees
 - **CloudFront:** first 1 TB free, then ~$0.085 / GB
+- **Bedrock (Amazon Nova):** pay-per-token; Nova Micro/Lite are very cheap for conversational use. See [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
 
 Typical moderate usage stays under **$5/month**. Set a CloudWatch billing alarm to be safe.
 
