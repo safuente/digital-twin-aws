@@ -67,6 +67,7 @@ digital-twin-aws/
 - **Python 3.12** and [`uv`](https://docs.astral.sh/uv/)
 - **Node.js 18+** and npm (for the frontend)
 - **Docker Desktop** (used by `deploy.py` to build Linux-native dependencies)
+- [**Terraform**](https://developer.hashicorp.com/terraform/install) `>= 1.0` (for the automated deployment)
 - An **AWS account** with the AWS CLI configured (`aws configure` or SSO)
 - **AWS Bedrock access** to the Amazon Nova models in your region (no longer requires per-model approval as of 2026 — it's quota-based; request a quota increase only if you hit limits)
 
@@ -126,7 +127,163 @@ Open `http://localhost:3000` and chat with your twin.
 
 ---
 
+## Deploying with Terraform (recommended)
+
+The whole stack is defined as code under `twin/terraform/` and driven by two helper
+scripts in `twin/scripts/`. This is the **recommended** path — it provisions everything
+the manual guide below does (Lambda, API Gateway, memory + frontend S3 buckets, and the
+CloudFront distribution), builds and uploads the frontend, and wires the environment
+variables and CORS automatically.
+
+### What's in `twin/terraform/`
+
+| File            | Purpose                                                                 |
+| --------------- | ----------------------------------------------------------------------- |
+| `main.tf`       | All resources: S3 buckets, IAM role, Lambda, API Gateway, CloudFront, optional Route 53 + ACM for a custom domain |
+| `variables.tf`  | Input variables and their validation                                    |
+| `outputs.tf`    | Outputs: API URL, CloudFront URL, bucket names, Lambda name             |
+| `versions.tf`   | Terraform / AWS provider version constraints                            |
+| `terraform.tfvars` | Default values (used for `dev`)                                      |
+
+Resources are named `<project_name>-<environment>-*` (e.g. `twin-dev-api`), and the S3
+buckets get the AWS account ID appended for global uniqueness. Each environment lives in
+its own **Terraform workspace** (`dev`, `test`, `prod`), so their states never collide.
+
+### Input variables
+
+| Variable                   | Default                    | Description                                        |
+| -------------------------- | -------------------------- | -------------------------------------------------- |
+| `project_name`             | `twin`                     | Name prefix for all resources                      |
+| `environment`              | `dev`                      | One of `dev`, `test`, `prod`                        |
+| `bedrock_model_id`         | `amazon.nova-micro-v1:0`   | Bedrock model the Lambda uses                      |
+| `lambda_timeout`           | `60`                       | Lambda timeout (seconds)                           |
+| `api_throttle_burst_limit` | `10`                       | API Gateway burst throttle                         |
+| `api_throttle_rate_limit`  | `5`                        | API Gateway steady-state throttle                  |
+| `use_custom_domain`        | `false`                    | Attach a custom domain (needs a Route 53 zone)     |
+| `root_domain`              | `""`                       | Apex domain, e.g. `example.com`                    |
+
+### Deploy
+
+Make sure **Docker Desktop is running** (the script builds the Lambda zip first) and your
+AWS CLI is authenticated, then from `twin/`:
+
+```bash
+./scripts/deploy.sh <environment> [project_name]
+# examples
+./scripts/deploy.sh dev
+./scripts/deploy.sh test
+./scripts/deploy.sh prod
+```
+
+`deploy.sh` runs the full pipeline end to end:
+
+1. **Builds** the Lambda package (`cd backend && uv run deploy.py` → `lambda-deployment.zip`).
+2. **`terraform init`**, then creates/selects the workspace matching `<environment>`.
+3. **`terraform apply`** to provision or update all infrastructure. For `prod` it also
+   passes `-var-file=prod.tfvars` (see the custom-domain note below).
+4. Reads the Terraform **outputs** (API URL, frontend bucket, custom domain).
+5. Writes `frontend/.env.production` with `NEXT_PUBLIC_API_URL`, runs `npm install` &
+   `npm run build`, and **syncs** the static export to the frontend S3 bucket.
+6. Prints the CloudFront URL, the custom domain (if any), and the API Gateway URL.
+
+Prefer to run Terraform yourself? The scripted steps map to:
+
+```bash
+cd twin/backend && uv run deploy.py          # build lambda-deployment.zip
+cd ../terraform
+terraform init
+terraform workspace new dev || terraform workspace select dev
+terraform apply -var="project_name=twin" -var="environment=dev"
+terraform output                              # inspect URLs and bucket names
+```
+
+### Custom domain (optional, typically `prod`)
+
+To serve the site from your own domain you need a **public Route 53 hosted zone** for that
+domain in the same account.
+
+#### Step 1 — Register a domain (if you don't have one)
+
+> ⚠️ Domain registration requires billing permissions, so sign in as the **root user** for
+> this step (not your IAM user).
+
+**Option A — Register through Route 53**
+
+1. Sign out of your IAM user and sign in to the AWS Console as the **root user**.
+2. Go to **Route 53 → Registered domains → Register domain**.
+3. Search for the domain you want, add it to the cart, and complete the purchase
+   (typically **$12–40/year** depending on the TLD).
+4. Wait for registration to finish (**5–30 minutes**).
+5. Sign back in as your IAM user to continue.
+
+**Option B — Use a domain you already own elsewhere**
+
+Either transfer DNS to Route 53, or create a hosted zone here (Step 2) and update the
+**nameservers** at your current registrar to the ones Route 53 assigns.
+
+#### Step 2 — Create a hosted zone (if not auto-created)
+
+Registering through Route 53 usually creates the hosted zone automatically. If not:
+
+1. Go to **Route 53 → Hosted zones → Create hosted zone**.
+2. Enter your domain name and choose **Type: Public hosted zone**.
+3. Click **Create**.
+
+#### Step 3 — Configure and deploy
+
+The repo ships a `twin/terraform/prod.tfvars` template — edit it and replace the
+placeholder `root_domain` with your actual domain:
+
+```hcl
+project_name             = "twin"
+environment              = "prod"
+bedrock_model_id         = "amazon.nova-lite-v1:0"  # better model for production
+lambda_timeout           = 60
+api_throttle_burst_limit = 20
+api_throttle_rate_limit  = 10
+use_custom_domain        = true
+root_domain              = "yourdomain.com"          # replace with your domain
+```
+
+Terraform then requests an ACM certificate (in `us-east-1`, as CloudFront requires),
+validates it via DNS, attaches `yourdomain.com` + `www.yourdomain.com` to the distribution,
+and creates the Route 53 alias records. `deploy.sh prod` picks up `prod.tfvars`
+automatically. Set `use_custom_domain = false` to skip the domain and just use the default
+CloudFront URL.
+
+### Destroy / teardown
+
+To tear an environment down, from `twin/`:
+
+```bash
+./scripts/destroy.sh <environment> [project_name]
+# example
+./scripts/destroy.sh test
+```
+
+`destroy.sh`:
+
+1. Selects the `<environment>` workspace (errors if it doesn't exist).
+2. **Empties both S3 buckets** first — `terraform destroy` cannot delete non-empty buckets,
+   so the frontend and memory buckets are emptied via `aws s3 rm --recursive`.
+   > ⚠️ This permanently deletes all stored conversation history in the memory bucket.
+3. Runs `terraform destroy -auto-approve` (adding `-var-file=prod.tfvars` for `prod`).
+
+The workspace itself is kept. To remove it completely afterwards:
+
+```bash
+cd twin/terraform
+terraform workspace select default
+terraform workspace delete <environment>
+```
+
+---
+
 ## Deploying to AWS
+
+> The steps below are the **manual, console-based** equivalent of the Terraform
+> deployment above — useful for understanding what gets created or for a one-off setup
+> without Terraform. For repeatable deployments, prefer the scripts in the previous section.
 
 The deployment provisions a Lambda backend, an HTTP API Gateway in front of it, two S3 buckets (memory + frontend hosting), and a CloudFront distribution for HTTPS delivery.
 
